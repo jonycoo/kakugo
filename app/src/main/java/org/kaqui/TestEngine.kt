@@ -23,19 +23,6 @@ class TestEngine(
         private const val LAST_QUESTIONS_TO_AVOID_COUNT = 6
         const val MAX_HISTORY_SIZE = 40
 
-        fun getKnowledgeType(testType: TestType) =
-                when (testType) {
-                    TestType.HIRAGANA_TO_ROMAJI, TestType.HIRAGANA_TO_ROMAJI_TEXT, TestType.ROMAJI_TO_HIRAGANA,
-                    TestType.KATAKANA_TO_ROMAJI, TestType.KATAKANA_TO_ROMAJI_TEXT, TestType.ROMAJI_TO_KATAKANA,
-                    TestType.KANJI_TO_READING, TestType.READING_TO_KANJI,
-                    TestType.WORD_TO_READING, TestType.READING_TO_WORD -> KnowledgeType.Reading
-
-                    TestType.HIRAGANA_DRAWING, TestType.KATAKANA_DRAWING, TestType.KANJI_DRAWING, TestType.KANJI_COMPOSITION -> KnowledgeType.Strokes
-
-                    TestType.KANJI_TO_MEANING, TestType.MEANING_TO_KANJI,
-                    TestType.WORD_TO_MEANING, TestType.MEANING_TO_WORD -> KnowledgeType.Meaning
-                }
-
         fun getItemView(db: Database, testType: TestType): LearningDbView =
                 when (testType) {
                     TestType.HIRAGANA_TO_ROMAJI, TestType.HIRAGANA_TO_ROMAJI_TEXT, TestType.ROMAJI_TO_HIRAGANA, TestType.HIRAGANA_DRAWING -> db.getHiraganaView(getKnowledgeType(testType))
@@ -70,11 +57,13 @@ class TestEngine(
 
     private val history = ArrayList<HistoryLine>()
     private val lastQuestionsIds = ArrayDeque<Int>()
+    private var sessionId: Long = 0
 
     val answerCount
         get() = getAnswerCount(testType)
 
     fun loadState(savedInstanceState: Bundle) {
+        sessionId = savedInstanceState.getLong("sessionId")
         testType = savedInstanceState.getSerializable("testType") as TestType
         currentQuestion = getItem(savedInstanceState.getInt("question"))
         currentAnswers = savedInstanceState.getIntArray("answers")!!.map { getItem(it) }
@@ -84,6 +73,7 @@ class TestEngine(
     }
 
     fun saveState(outState: Bundle) {
+        outState.putLong("sessionId", sessionId)
         outState.putSerializable("testType", testType)
         outState.putInt("question", currentQuestion.id)
         outState.putIntArray("answers", currentAnswers.map { it.id }.toIntArray())
@@ -93,6 +83,9 @@ class TestEngine(
     }
 
     fun prepareNewQuestion() {
+        if (sessionId == 0L)
+            sessionId = db.initSession(getItemType(testTypes[0]), testTypes)
+
         testType = testTypes[Random().nextInt(testTypes.size)]
 
         val (ids, debugParams) = SrsCalculator.fillProbalities(itemView.getEnabledItemsAndScores(), itemView.getMinLastAsked())
@@ -101,7 +94,7 @@ class TestEngine(
             throw RuntimeException("Too few items selected")
         }
 
-        val question = pickQuestion(db, ids)
+        val question = pickQuestion(ids)
         Log.v(TAG, "Selected question: $question")
         currentQuestion = question.item
         currentDebugData = DebugData(question.probabilityData, debugParams.probaParamsStage1, debugParams.probaParamsStage2, question.totalWeight, null)
@@ -110,7 +103,7 @@ class TestEngine(
         addIdToLastQuestions(currentQuestion.id)
     }
 
-    private fun pickQuestion(db: Database, ids: List<SrsCalculator.ProbabilityData>): PickedQuestion {
+    private fun pickQuestion(ids: List<SrsCalculator.ProbabilityData>): PickedQuestion {
         val idsWithoutRecent = ids.filter { it.itemId !in lastQuestionsIds }
 
         val totalWeight = idsWithoutRecent.map { it.finalProbability }.sum()
@@ -136,10 +129,10 @@ class TestEngine(
     private fun pickAnswers(db: Database, ids: List<SrsCalculator.ProbabilityData>, currentQuestion: Item): List<Item> =
             when (testType) {
                 TestType.KANJI_COMPOSITION -> pickCompositionAnswers(db, ids, currentQuestion)
-                else -> pickNormalTestAnswers(db, ids, currentQuestion)
+                else -> pickNormalTestAnswers(ids, currentQuestion)
             }
 
-    private fun pickNormalTestAnswers(db: Database, ids: List<SrsCalculator.ProbabilityData>, currentQuestion: Item): List<Item> {
+    private fun pickNormalTestAnswers(ids: List<SrsCalculator.ProbabilityData>, currentQuestion: Item): List<Item> {
         val similarItemIds = currentQuestion.similarities.map { it.id }.filter { itemView.isItemEnabled(it) }
         val similarItems =
                 if (similarItemIds.size >= answerCount - 1)
@@ -203,6 +196,7 @@ class TestEngine(
         if (certainty == Certainty.DONTKNOW) {
             val scoreUpdate = SrsCalculator.getScoreUpdate(minLastCorrect, currentQuestion, Certainty.DONTKNOW)
             itemView.applyScoreUpdate(scoreUpdate)
+            itemView.logTestItem(testType, scoreUpdate, certainty, wrong?.id)
             currentDebugData?.scoreUpdate = scoreUpdate
             if (wrong != null)
                 addWrongAnswerToHistory(currentQuestion, wrong)
@@ -211,6 +205,7 @@ class TestEngine(
         } else {
             val scoreUpdate = SrsCalculator.getScoreUpdate(minLastCorrect, currentQuestion, certainty)
             itemView.applyScoreUpdate(scoreUpdate)
+            itemView.logTestItem(testType, scoreUpdate, certainty, wrong?.id)
             currentDebugData?.scoreUpdate = scoreUpdate
             addGoodAnswerToHistory(currentQuestion)
             correctCount += 1
@@ -304,5 +299,9 @@ class TestEngine(
             itemView.getItem(id)
 
     val itemView: LearningDbView
-        get() = getItemView(db, testType)
+        get() {
+            val view = getItemView(db, testType)
+            view.sessionId = sessionId
+            return view
+        }
 }

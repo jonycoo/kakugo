@@ -21,6 +21,7 @@ import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.graphics.drawable.DrawableCompat
+import com.github.mikephil.charting.charts.BarChart
 import org.jetbrains.anko.*
 import org.jetbrains.anko.custom.ankoView
 import org.kaqui.model.BAD_WEIGHT
@@ -29,6 +30,7 @@ import org.kaqui.model.GOOD_WEIGHT
 import org.kaqui.model.TestType
 import org.kaqui.testactivities.DrawView
 import org.kaqui.testactivities.TestActivity
+import java.util.*
 import kotlin.math.pow
 
 fun getColorFromScore(score: Double) =
@@ -54,6 +56,7 @@ fun unitStep(x: Double): Double =
 fun lerp(a: Double, b: Double, r: Double): Double = a + (r * (b - a))
 
 fun secondsToDays(timestamp: Long) = timestamp / 3600.0 / 24.0
+fun daysToSeconds(days: Long) = days * 3600.0 * 24.0
 
 fun <T> pickRandom(list: List<T>, sample: Int, avoid: Set<T> = setOf()): List<T> {
     if (sample > list.size - avoid.size)
@@ -96,6 +99,19 @@ inline fun ViewManager.drawView(init: DrawView.() -> Unit = {}): DrawView {
     return ankoView({ DrawView(it) }, theme = 0, init = init)
 }
 
+inline fun ViewManager.barChart(init: BarChart.() -> Unit = {}): BarChart {
+    return ankoView({ BarChart(it) }, theme = 0, init = init)
+}
+
+fun Calendar.roundToPreviousDay() {
+    this.clear(Calendar.HOUR)
+    this.clear(Calendar.HOUR_OF_DAY)
+    this.clear(Calendar.MINUTE)
+    this.clear(Calendar.SECOND)
+    this.clear(Calendar.MILLISECOND)
+    this.clear(Calendar.AM_PM)
+}
+
 fun _LinearLayout.separator(context: Context) =
         view {
             backgroundColor = ContextCompat.getColor(context, R.color.separator)
@@ -121,10 +137,10 @@ fun startTest(activity: Activity, types: List<TestType>) {
         activity.longToast(R.string.enable_a_few_items)
         return
     }
-    
+
     val sharedPrefs = activity.defaultSharedPreferences
     val defaultTypes = sharedPrefs.getStringSet("custom_test_types", setOf())!!
-    
+
     val selected = types.filter { it.name in defaultTypes }.toMutableList()
     val checkedIndexes = types.map { v -> v in selected }.toBooleanArray()
     AlertDialog.Builder(activity)
@@ -167,12 +183,16 @@ val Activity.menuWidth
         else
             matchParent
 
+@ColorInt
 fun Context.getColorFromAttr(
         @AttrRes attrColor: Int
 ): Int {
     val typedValue = TypedValue()
     theme.resolveAttribute(attrColor, typedValue, true)
-    return typedValue.data
+    if (typedValue.resourceId != 0)
+        return ContextCompat.getColor(this, typedValue.resourceId)
+    else
+        return typedValue.data
 }
 
 fun Int.asUnicodeCodePoint() = Character.toChars(this).joinToString("")
